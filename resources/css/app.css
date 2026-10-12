@@ -1,0 +1,176 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   Global styles — OET Radiographer Practice Platform
+   ========================================================================== */
+
+@layer base {
+    html {
+        scroll-behavior: smooth;
+        -webkit-text-size-adjust: 100%;
+    }
+
+    body {
+        @apply bg-slate-50 text-slate-800 antialiased;
+        font-feature-settings: 'cv11', 'ss01';
+    }
+
+    /* Consistent, accessible focus ring across the whole app */
+    :focus-visible {
+        @apply outline-none ring-2 ring-primary-500 ring-offset-2 ring-offset-white;
+    }
+
+    /* Myanmar script needs the dedicated font stack or it falls back to a
+       system font with broken shaping. */
+    :lang(my),
+    .lang-my,
+    .font-myanmar {
+        font-family: 'Noto Sans Myanmar', Inter, sans-serif;
+        line-height: 1.9;
+    }
+}
+
+@layer components {
+    /* ---- Buttons -------------------------------------------------------- */
+    .btn {
+        @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5
+           text-sm font-semibold transition-all duration-150
+           disabled:cursor-not-allowed disabled:opacity-50;
+    }
+    .btn-primary {
+        @apply btn bg-primary-600 text-white shadow-sm hover:bg-primary-700 active:scale-[0.98];
+    }
+    .btn-secondary {
+        @apply btn border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 active:scale-[0.98];
+    }
+    .btn-success {
+        @apply btn bg-teal-600 text-white shadow-sm hover:bg-teal-700 active:scale-[0.98];
+    }
+    .btn-danger {
+        @apply btn bg-red-600 text-white shadow-sm hover:bg-red-700 active:scale-[0.98];
+    }
+    .btn-ghost {
+        @apply btn text-slate-600 hover:bg-slate-100;
+    }
+    .btn-sm {
+        @apply px-3 py-1.5 text-xs;
+    }
+    .btn-lg {
+        @apply px-6 py-3 text-base;
+    }
+
+    /* ---- Cards ---------------------------------------------------------- */
+    .card {
+        @apply rounded-xl border border-slate-200 bg-white shadow-card;
+    }
+    .card-hover {
+        @apply card transition-shadow duration-200 hover:shadow-card-hover;
+    }
+    .card-pad {
+        @apply p-5 sm:p-6;
+    }
+
+    /* ---- Forms ---------------------------------------------------------- */
+    .label {
+        @apply mb-1.5 block text-sm font-medium text-slate-700;
+    }
+    .input {
+        @apply w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm
+           text-slate-900 placeholder-slate-400 transition
+           focus:border-primary-500 focus:ring-2 focus:ring-primary-100;
+    }
+    .input-error {
+        @apply border-red-400 focus:border-red-500 focus:ring-red-100;
+    }
+    .field-error {
+        @apply mt-1 text-xs font-medium text-red-600;
+    }
+    .textarea {
+        @apply input resize-y leading-relaxed;
+    }
+
+    /* ---- Badges --------------------------------------------------------- */
+    .badge {
+        @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold;
+    }
+    .badge-blue { @apply badge bg-primary-50 text-primary-700; }
+    .badge-green { @apply badge bg-teal-50 text-teal-700; }
+    .badge-amber { @apply badge bg-amber-50 text-amber-700; }
+    .badge-red { @apply badge bg-red-50 text-red-700; }
+    .badge-slate { @apply badge bg-slate-100 text-slate-600; }
+    .badge-purple { @apply badge bg-purple-50 text-purple-700; }
+
+    /* ---- Layout helpers ------------------------------------------------- */
+    .container-page {
+        @apply mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8;
+    }
+    .section-title {
+        @apply text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl;
+    }
+    .section-subtitle {
+        @apply mt-2 text-base text-slate-600;
+    }
+    .link {
+        @apply font-medium text-primary-600 hover:text-primary-700 hover:underline;
+    }
+
+    /* ---- Exam player ---------------------------------------------------- */
+    .option {
+        @apply flex w-full cursor-pointer items-start gap-3 rounded-lg border border-slate-300
+           bg-white p-3.5 text-left text-sm transition hover:border-primary-400 hover:bg-primary-50/40;
+    }
+    .option-selected {
+        @apply border-primary-500 bg-primary-50 ring-1 ring-primary-500;
+    }
+    .option-correct {
+        @apply border-teal-500 bg-teal-50;
+    }
+    .option-incorrect {
+        @apply border-red-400 bg-red-50;
+    }
+    .qnav-btn {
+        @apply flex h-9 w-9 items-center justify-center rounded-md border text-xs font-semibold transition;
+    }
+
+    /* Aliases kept from the Laravel scaffold's own stylesheet. */
+    .oet-card {
+        @apply card;
+    }
+    .oet-input {
+        @apply input;
+    }
+    .oet-label {
+        @apply label;
+    }
+}
+
+@layer utilities {
+    /* Hide scrollbars on horizontal nav strips while keeping them scrollable */
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+    /* Rich text rendering for AI feedback and model answers.
+       Model letters depend on the preserved line breaks — any component
+       replacing this MUST keep white-space: pre-wrap. */
+    .prose-answer {
+        @apply whitespace-pre-wrap text-sm leading-relaxed text-slate-700;
+        overflow-wrap: anywhere;
+    }
+}
+
+/* Slim, unobtrusive scrollbar inside the exam navigator. */
+.navigator-scroll::-webkit-scrollbar {
+    width: 8px;
+}
+.navigator-scroll::-webkit-scrollbar-thumb {
+    background-color: rgb(203 213 225);
+    border-radius: 9999px;
+}
+
+/* ---- Print: allow students to print their results ---------------------- */
+@media print {
+    .no-print { display: none !important; }
+    body { background: white; }
+}

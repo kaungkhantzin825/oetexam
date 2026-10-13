@@ -4,7 +4,9 @@
     "scripts": {
         "dev": "vite",
         "build": "vite build",
-        "check:locales": "node scripts/locale-check.mjs"
+        "check:locales": "node scripts/locale-check.mjs",
+        "check:lock": "node scripts/lock-check.mjs",
+        "check": "npm run check:locales && npm run check:lock"
     },
     "dependencies": {
         "@inertiajs/vue3": "^1.3.0",

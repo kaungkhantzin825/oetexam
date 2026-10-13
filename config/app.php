@@ -61,6 +61,27 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Force HTTPS
+    |--------------------------------------------------------------------------
+    |
+    | Production is always reached over TLS — either Apache with a certbot
+    | certificate, or (as here) a CDN that terminates TLS and forwards to the
+    | origin over plain HTTP. In that second case PHP sees `http`, so every
+    | absolute URL Laravel generates comes out as `http://`, and the browser
+    | blocks the post-login redirect as mixed content: the sign-in appears to
+    | fail with "Network Error" and the user can never get past the form.
+    |
+    | Trusting the proxy headers fixes scheme detection properly (see
+    | App\Http\Middleware\TrustProxies). This flag is the backstop for when the
+    | headers do not arrive. Defaults on in production; set FORCE_HTTPS=false
+    | for a production install deliberately served over plain HTTP.
+    |
+    */
+
+    'force_https' => env('FORCE_HTTPS', env('APP_ENV') === 'production'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Timezone
     |--------------------------------------------------------------------------
     |

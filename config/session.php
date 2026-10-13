@@ -166,9 +166,15 @@ return [
     | to the server if the browser has a HTTPS connection. This will keep
     | the cookie from being sent to you when it can't be done securely.
     |
+    | Production is always reached over HTTPS (see config/app.php → force_https),
+    | so this defaults on there. That matters more than it looks: an http://
+    | request to the same host — a stale bookmark, a typed URL — would otherwise
+    | carry the session cookie in the clear, because a CDN answering on port 80
+    | never redirects to https on its own.
+    |
     */
 
-    'secure' => env('SESSION_SECURE_COOKIE'),
+    'secure' => env('SESSION_SECURE_COOKIE', env('APP_ENV') === 'production'),
 
     /*
     |--------------------------------------------------------------------------

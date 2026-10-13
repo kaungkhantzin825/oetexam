@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Support\SafeRedirect;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -109,7 +110,14 @@ class AuthController extends Controller
         $request->session()->regenerate();
         $user->forceFill(['last_login_at' => now()])->save();
 
-        return redirect()->intended(route('dashboard'))->with(
+        // Deliberately not redirect()->intended(): it replays the stored
+        // absolute URL verbatim, scheme and all, which is how a session
+        // captured over http:// turns a successful sign-in into a browser
+        // mixed-content block. See App\Support\SafeRedirect.
+        return redirect()->to(SafeRedirect::toPath(
+            $request->session()->pull('url.intended'),
+            route('dashboard', [], false),
+        ))->with(
             'success',
             'Welcome back, '.explode(' ', $user->name)[0].'!'
         );

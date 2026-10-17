@@ -4,7 +4,7 @@
   The exam-taking screen. Responsibilities:
 
     • Countdown derived from an ABSOLUTE deadline, so a refresh cannot reset it
-    • Question navigation: previous / next / jump via the navigator grid
+    • ALL questions shown on a single scrollable page (no one-at-a-time nav)
     • Auto-save of changed answers every 10 seconds, plus save on exit
     • "Mark for review" flagging
     • Submit confirmation with a summary of unanswered questions
@@ -17,16 +17,13 @@
   component never has to POST "start"; a plain page load is enough.
 -->
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Head, router } from '@inertiajs/vue3';
 import {
     AlertTriangle,
-    ChevronLeft,
-    ChevronRight,
     Cloud,
     CloudOff,
     Flag,
-    Grid3x3,
     Send,
     X,
 } from 'lucide-vue-next';
@@ -54,12 +51,10 @@ const AUTOSAVE_INTERVAL_MS = 10000;
 
 /** answers: { [questionId]: { user_answer, image_path, is_marked, time_spent_seconds } } */
 const answers = ref({});
-const index = ref(0);
 const secondsLeft = ref(0);
 const saveState = ref('idle'); // idle | saving | saved | error
 const lastSavedAt = ref(null);
 const showSubmit = ref(false);
-const showNav = ref(false);
 const submitting = ref(false);
 
 // Non-reactive bookkeeping
@@ -130,7 +125,7 @@ function payloadFor(ids) {
     }));
 }
 
-async function saveDirty({ silent = true } = {}) {
+async function saveDirty({ silent = true, rethrow = false } = {}) {
     const ids = [...dirty];
     if (!ids.length) return;
 
@@ -145,22 +140,23 @@ async function saveDirty({ silent = true } = {}) {
     } catch (err) {
         saveState.value = 'error';
         if (!silent) toast.from(err, t('errors.saveFailed'));
+        // When called from doSubmit, propagate the error so the submit does
+        // not proceed against a server that just rejected the save (likely
+        // a CSRF mismatch or session expiry — the submit would fail too).
+        if (rethrow) throw err;
     }
 }
 
 /* ==========================================================================
-   Answer editing
+   Answer editing — all questions are on one page, so edits target a specific
+   question ID rather than "the current question".
    ========================================================================== */
 
-const current = computed(() => props.questions[index.value] || null);
-
-function setAnswer(value) {
-    const q = current.value;
-    if (!q) return;
-    dirty.add(q.id);
+function setAnswer(questionId, value) {
+    dirty.add(questionId);
     answers.value = {
         ...answers.value,
-        [q.id]: { ...answers.value[q.id], user_answer: value },
+        [questionId]: { ...answers.value[questionId], user_answer: value },
     };
 }
 
@@ -172,28 +168,19 @@ function setAnswer(value) {
  * local copy exists only so the player can show the photo and count the
  * question as answered.
  */
-function setImage(path) {
-    const q = current.value;
-    if (!q) return;
+function setImage(questionId, path) {
     answers.value = {
         ...answers.value,
-        [q.id]: { ...answers.value[q.id], image_path: path || '' },
+        [questionId]: { ...answers.value[questionId], image_path: path || '' },
     };
 }
 
-function toggleMark() {
-    const q = current.value;
-    if (!q) return;
-    dirty.add(q.id);
+function toggleMark(questionId) {
+    dirty.add(questionId);
     answers.value = {
         ...answers.value,
-        [q.id]: { ...answers.value[q.id], is_marked: !answers.value[q.id]?.is_marked },
+        [questionId]: { ...answers.value[questionId], is_marked: !answers.value[questionId]?.is_marked },
     };
-}
-
-function goTo(i) {
-    index.value = Math.max(0, Math.min(props.questions.length - 1, i));
-    showNav.value = false;
 }
 
 /* ==========================================================================
@@ -214,14 +201,23 @@ const answeredCount = computed(() => props.questions.filter(isAnswered).length);
 const flaggedCount = computed(() => props.questions.filter((q) => answers.value[q.id]?.is_marked).length);
 const unansweredCount = computed(() => total.value - answeredCount.value);
 
-function navClass(q, i) {
-    const a = answers.value[q.id];
-    let cls = 'border-slate-300 bg-white text-slate-600 hover:border-primary-400';
-    if (isAnswered(q)) cls = 'border-teal-500 bg-teal-50 text-teal-700';
-    if (a?.is_marked) cls = 'border-amber-400 bg-amber-50 text-amber-700';
-    if (i === index.value) cls += ' ring-2 ring-primary-500 ring-offset-1';
-    return ['qnav-btn', cls];
-}
+/** Group questions by `part` for visual separation on the single-page view. */
+const groupedQuestions = computed(() => {
+    const groups = [];
+    let currentGroup = null;
+
+    for (let i = 0; i < props.questions.length; i++) {
+        const q = props.questions[i];
+        const part = q.part || '';
+
+        if (!currentGroup || currentGroup.part !== part) {
+            currentGroup = { part, questions: [] };
+            groups.push(currentGroup);
+        }
+        currentGroup.questions.push({ ...q, _index: i });
+    }
+    return groups;
+});
 
 /* ==========================================================================
    Submission
@@ -235,17 +231,41 @@ async function doSubmit(auto = false) {
     const startedMs = new Date(String(props.attempt.started_at).replace(' ', 'T')).getTime() || Date.now();
 
     try {
-        const res = await http.post(`/attempts/${props.attempt.id}/submit`, {
-            answers: payloadFor(Object.keys(answers.value)),
+        // Save any unsaved answers first, so the server has the latest state.
+        // Re-throw on failure so we don't submit against a broken session.
+        if (dirty.size > 0) {
+            await saveDirty({ silent: true, rethrow: true });
+        }
+
+        // Build the full answer payload from ALL answers (not just dirty).
+        const allIds = Object.keys(answers.value);
+        const payload = payloadFor(allIds);
+
+        // http.post() already unwraps the axios response — the returned value
+        // IS the JSON body: { success, message, data: { attempt_id, ... } }
+        const result = await http.post(`/attempts/${props.attempt.id}/submit`, {
+            answers: payload,
             time_spent_seconds: Math.max(0, Math.round((Date.now() - startedMs) / 1000)),
             auto_submitted: auto,
         });
 
         if (!auto) toast.success(t('common.submit'));
-        router.visit(`/attempts/${res.data.attempt_id}/result`, { replace: true });
+
+        // Handle both possible response shapes and fall back gracefully.
+        const attemptId = result?.data?.attempt_id ?? result?.attempt_id ?? props.attempt.id;
+
+        // Navigate to the result page.
+        router.visit(`/attempts/${attemptId}/result`, { replace: true });
     } catch (err) {
         submitted = false;
         submitting.value = false;
+        // If it's a CSRF / session issue (419), the token is stale — reload
+        // the page so the meta tag gets a fresh token.
+        if (err?.status === 419) {
+            toast.error('Your session expired. The page will reload to refresh it.');
+            setTimeout(() => window.location.reload(), 2000);
+            return;
+        }
         toast.from(err, t('errors.generic'));
     }
 }
@@ -267,11 +287,6 @@ function saveAndExit() {
     });
 }
 
-function jumpToFirstFlagged() {
-    const i = props.questions.findIndex((q) => answers.value[q.id]?.is_marked);
-    if (i >= 0) goTo(i);
-}
-
 onMounted(() => {
     hydrate();
     tick();
@@ -284,11 +299,6 @@ onBeforeUnmount(() => {
     clearInterval(timerId);
     clearInterval(autosaveId);
     window.removeEventListener('beforeunload', beforeUnload);
-});
-
-// Warn before losing the exam if the student closes the tab mid-attempt.
-watch(showSubmit, (open) => {
-    if (open) showNav.value = false;
 });
 
 const saveLabel = computed(() => {
@@ -311,7 +321,7 @@ const saveLabel = computed(() => {
     <div class="flex min-h-screen flex-col bg-slate-50">
         <!-- ================= Top bar ================= -->
         <header class="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
-            <div class="mx-auto flex w-full max-w-7xl items-center gap-3 px-4 py-3 sm:px-6">
+            <div class="mx-auto flex w-full max-w-5xl items-center gap-3 px-4 py-3 sm:px-6">
                 <div class="min-w-0 flex-1">
                     <p class="truncate text-sm font-bold text-slate-900">{{ exam.title }}</p>
                     <p class="mt-0.5 inline-flex items-center gap-1.5 text-xs text-slate-500">
@@ -327,113 +337,83 @@ const saveLabel = computed(() => {
 
                 <Timer :remaining="secondsLeft" />
 
-                <button type="button" class="btn-primary hidden sm:inline-flex" @click="showSubmit = true">
+                <button type="button" class="btn-primary inline-flex" @click="showSubmit = true">
                     <Send :size="15" /> {{ t('exam.submitTest') }}
-                </button>
-
-                <button
-                    type="button"
-                    class="btn-secondary lg:hidden"
-                    :aria-label="t('exam.questionNavigator')"
-                    @click="showNav = true"
-                >
-                    <Grid3x3 :size="17" />
                 </button>
             </div>
 
-            <!-- Progress strip -->
+            <!-- Progress strip — shows answered / total -->
             <div class="h-1 w-full bg-slate-200">
                 <div
                     class="h-full bg-primary-600 transition-all duration-300"
-                    :style="{ width: total ? ((index + 1) / total) * 100 + '%' : '0%' }"
+                    :style="{ width: total ? (answeredCount / total) * 100 + '%' : '0%' }"
                 />
             </div>
         </header>
 
-        <!-- ================= Body ================= -->
-        <div class="mx-auto flex w-full max-w-7xl flex-1 gap-6 px-4 py-6 sm:px-6">
-            <!-- ---- Question ---- -->
-            <main class="min-w-0 flex-1">
-                <div v-if="current" class="card card-pad">
-                    <QuestionCard
-                        :question="current"
-                        :index="index"
-                        :total="total"
-                        :value="answers[current.id]?.user_answer ?? ''"
-                        :image-path="answers[current.id]?.image_path ?? ''"
-                        :is-marked="Boolean(answers[current.id]?.is_marked)"
-                        :attempt-id="attempt.id"
-                        @update:value="setAnswer"
-                        @update:image-path="setImage"
-                        @toggle-mark="toggleMark"
-                    />
-
-                    <!-- Prev / next -->
-                    <div class="mt-6 flex items-center justify-between gap-3 border-t border-slate-200 pt-5">
-                        <button type="button" class="btn-secondary" :disabled="index === 0" @click="goTo(index - 1)">
-                            <ChevronLeft :size="16" /> {{ t('common.previous') }}
-                        </button>
-
-                        <span class="text-xs text-slate-500">
-                            {{ t('exam.questionOf', { current: index + 1, total }) }}
-                        </span>
-
-                        <button v-if="index === total - 1" type="button" class="btn-success" @click="showSubmit = true">
-                            <Send :size="16" /> {{ t('exam.submitTest') }}
-                        </button>
-                        <button v-else type="button" class="btn-primary" @click="goTo(index + 1)">
-                            {{ t('common.next') }} <ChevronRight :size="16" />
-                        </button>
-                    </div>
+        <!-- ================= Summary bar ================= -->
+        <div class="sticky top-[57px] z-20 border-b border-slate-200 bg-slate-50/95 backdrop-blur">
+            <div class="mx-auto flex w-full max-w-5xl items-center justify-between gap-4 px-4 py-2 sm:px-6">
+                <div class="flex items-center gap-4 text-xs">
+                    <span class="inline-flex items-center gap-1 text-slate-600">
+                        <span class="font-bold text-teal-700">{{ answeredCount }}</span>
+                        / {{ total }} {{ t('exam.answered') }}
+                    </span>
+                    <span class="inline-flex items-center gap-1 text-slate-600">
+                        <Flag :size="11" class="text-amber-500" />
+                        <span class="font-bold text-amber-700">{{ flaggedCount }}</span>
+                        {{ t('exam.flagged') }}
+                    </span>
+                    <span class="hidden text-slate-600 sm:inline">
+                        <span class="font-bold text-slate-700">{{ unansweredCount }}</span>
+                        {{ t('exam.unanswered') }}
+                    </span>
                 </div>
+            </div>
+        </div>
 
-                <div v-else class="card card-pad text-center text-sm text-slate-500">
-                    {{ t('exam.noQuestions') }}
-                </div>
-            </main>
+        <!-- ================= Body — all questions on one page ================= -->
+        <div class="mx-auto w-full max-w-5xl flex-1 px-4 py-6 sm:px-6">
+            <!-- No questions -->
+            <div v-if="!questions.length" class="card card-pad text-center text-sm text-slate-500">
+                {{ t('exam.noQuestions') }}
+            </div>
 
-            <!-- ---- Side navigator (desktop) ---- -->
-            <aside class="hidden w-64 shrink-0 lg:block">
-                <div class="card sticky top-24 p-4">
-                    <h2 class="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        {{ t('exam.questionNavigator') }}
-                    </h2>
-
-                    <div class="navigator-scroll mt-3 grid max-h-[320px] grid-cols-6 gap-2 overflow-y-auto">
-                        <button
-                            v-for="(q, i) in questions"
-                            :key="q.id"
-                            type="button"
-                            :class="navClass(q, i)"
-                            :title="q.part || `Question ${i + 1}`"
-                            @click="goTo(i)"
-                        >
-                            {{ i + 1 }}
-                        </button>
+            <!-- Questions grouped by part -->
+            <template v-else>
+                <div
+                    v-for="(group, gi) in groupedQuestions"
+                    :key="gi"
+                    class="mb-6"
+                >
+                    <!-- Part heading -->
+                    <div v-if="group.part" class="mb-3 flex items-center gap-2">
+                        <h2 class="text-sm font-bold uppercase tracking-wide text-slate-700">{{ group.part }}</h2>
+                        <div class="h-px flex-1 bg-slate-200"></div>
                     </div>
 
-                    <dl class="mt-4 space-y-1.5 border-t border-slate-100 pt-3.5 text-xs">
-                        <div class="flex items-center justify-between">
-                            <dt class="text-slate-500">{{ t('exam.answered') }}</dt>
-                            <dd class="font-semibold text-teal-700">{{ answeredCount }} / {{ total }}</dd>
-                        </div>
-                        <div class="flex items-center justify-between">
-                            <dt class="inline-flex items-center gap-1 text-slate-500">
-                                <Flag :size="11" class="text-amber-500" /> {{ t('exam.flagged') }}
-                            </dt>
-                            <dd class="font-semibold text-amber-700">{{ flaggedCount }}</dd>
-                        </div>
-                        <div class="flex items-center justify-between">
-                            <dt class="text-slate-500">{{ t('exam.unanswered') }}</dt>
-                            <dd class="font-semibold text-slate-700">{{ unansweredCount }}</dd>
-                        </div>
-                    </dl>
-
-                    <button type="button" class="btn-primary mt-4 w-full" @click="showSubmit = true">
-                        <Send :size="15" /> {{ t('exam.submitTest') }}
-                    </button>
+                    <!-- Each question card -->
+                    <div
+                        v-for="q in group.questions"
+                        :key="q.id"
+                        :id="`question-${q.id}`"
+                        class="card card-pad mb-4 scroll-mt-32"
+                    >
+                        <QuestionCard
+                            :question="q"
+                            :index="q._index"
+                            :total="total"
+                            :value="answers[q.id]?.user_answer ?? ''"
+                            :image-path="answers[q.id]?.image_path ?? ''"
+                            :is-marked="Boolean(answers[q.id]?.is_marked)"
+                            :attempt-id="attempt.id"
+                            @update:value="setAnswer(q.id, $event)"
+                            @update:image-path="setImage(q.id, $event)"
+                            @toggle-mark="toggleMark(q.id)"
+                        />
+                    </div>
                 </div>
-            </aside>
+            </template>
         </div>
 
         <!-- ---- Mobile submit bar ---- -->
@@ -442,36 +422,6 @@ const saveLabel = computed(() => {
                 <Send :size="15" /> {{ t('exam.submitTest') }}
             </button>
         </div>
-
-        <!-- ================= Mobile navigator ================= -->
-        <AppModal :open="showNav" :title="t('exam.questionNavigator')" @close="showNav = false">
-            <div class="grid grid-cols-6 gap-2 sm:grid-cols-8">
-                <button
-                    v-for="(q, i) in questions"
-                    :key="q.id"
-                    type="button"
-                    :class="navClass(q, i)"
-                    @click="goTo(i)"
-                >
-                    {{ i + 1 }}
-                </button>
-            </div>
-
-            <div class="mt-5 grid grid-cols-3 gap-3 border-t border-slate-100 pt-4 text-center text-xs">
-                <div>
-                    <p class="font-bold text-teal-700">{{ answeredCount }}</p>
-                    <p class="text-slate-500">{{ t('exam.answered') }}</p>
-                </div>
-                <div>
-                    <p class="font-bold text-amber-700">{{ flaggedCount }}</p>
-                    <p class="text-slate-500">{{ t('exam.flagged') }}</p>
-                </div>
-                <div>
-                    <p class="font-bold text-slate-700">{{ unansweredCount }}</p>
-                    <p class="text-slate-500">{{ t('exam.unanswered') }}</p>
-                </div>
-            </div>
-        </AppModal>
 
         <!-- ================= Submit confirmation ================= -->
         <AppModal
@@ -514,9 +464,6 @@ const saveLabel = computed(() => {
             >
                 <Flag :size="14" class="shrink-0" />
                 <span>{{ t('exam.flaggedWarning', { count: flaggedCount }) }}</span>
-                <button type="button" class="font-semibold underline" @click="jumpToFirstFlagged">
-                    {{ t('exam.reviewFlagged') }}
-                </button>
             </p>
 
             <template #footer>

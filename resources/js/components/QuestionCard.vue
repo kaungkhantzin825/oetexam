@@ -162,11 +162,16 @@ function select(index) {
 
         <!-- ---- Answer input: MCQ ---- -->
         <div v-if="question.question_type === 'MCQ'" class="space-y-2.5" role="radiogroup" aria-label="Answer options">
-            <label
+            <div
                 v-for="(opt, i) in options"
                 :key="i"
                 :class="['option', String(value) === String(i) ? 'option-selected' : '']"
+                role="radio"
+                :aria-checked="String(value) === String(i)"
+                tabindex="0"
                 @click="select(i)"
+                @keydown.enter.prevent="select(i)"
+                @keydown.space.prevent="select(i)"
             >
                 <span
                     :class="[
@@ -180,7 +185,7 @@ function select(index) {
                 </span>
                 <span class="flex-1 leading-relaxed text-slate-800">{{ opt }}</span>
                 <Check v-if="String(value) === String(i)" :size="16" class="mt-0.5 shrink-0 text-primary-600" />
-            </label>
+            </div>
         </div>
 
         <!-- ---- Answer input: ShortAnswer ---- -->
